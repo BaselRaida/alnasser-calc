@@ -1,5 +1,5 @@
 // يحفظ ملفات الواجهة فقط ليفتح التطبيق بسرعة وبدون إنترنت. البيانات المالية لا تُخزَّن هنا.
-const CACHE = 'nasser-v5';
+const CACHE = 'nasser-v6';
 const SHELL = ['./', 'index.html', 'app.css', 'app.js', 'config.js', 'manifest.webmanifest', 'icons/icon-192.png'];
 
 self.addEventListener('install', e => {
@@ -13,7 +13,8 @@ self.addEventListener('fetch', e => {
   if (req.method !== 'GET' || new URL(req.url).origin !== location.origin) return;
   // الشبكة أولًا ليصل أي تحديث للتطبيق فورًا، ثم النسخة المحفوظة عند انقطاع الإنترنت
   e.respondWith(
-    fetch(req).then(res => {
+    // no-cache: يسأل الخادم دائمًا عن أحدث نسخة بدل الاعتماد على ذاكرة المتصفح (كانت تؤخر ظهور التحديثات)
+    fetch(req.url, { cache: 'no-cache' }).then(res => {
       const copy = res.clone();
       caches.open(CACHE).then(c => c.put(req, copy));
       return res;

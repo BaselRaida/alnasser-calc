@@ -1,6 +1,7 @@
 (() => {
   'use strict';
 
+  const APP_VERSION = '1.2'; // يظهر في الإعدادات للتأكد من أن الهاتف يعمل بآخر نسخة
   const CFG = window.APP_CONFIG || {};
   // على الجهاز المحلي يُستخدم خادم التجربة، إلا إذا أُضيف ‎?live=1 للاتصال بالملف الحقيقي
   const DEV = ['localhost', '127.0.0.1'].includes(location.hostname) && !/[?&]live=1/.test(location.search);
@@ -339,7 +340,9 @@
       ${admin && S.viewKey ? `<h2 class="sec">مشاركة التطبيق</h2>
       <div class="card"><p class="muted" style="margin:0 0 10px;font-size:13.5px">رابط العرض فقط لمدير الجمعية — يرى كل الحركات والمؤشرات دون إمكانية الإضافة أو التعديل.</p>
         <button class="btn gold" data-act="share">مشاركة رابط العرض</button></div>` : ''}
-      <div class="btn-row"><button class="btn ghost" data-act="refresh">تحديث البيانات الآن</button></div>`;
+      <div class="btn-row"><button class="btn ghost" data-act="refresh">تحديث البيانات الآن</button></div>
+      <div class="btn-row"><button class="btn ghost" data-act="update-app">تحديث التطبيق لآخر نسخة</button></div>
+      <p class="muted" style="text-align:center;font-size:12px;margin:14px 0 0">إصدار التطبيق <span class="num">${APP_VERSION}</span></p>`;
     }
   };
 
@@ -618,6 +621,16 @@
     else prompt('انسخ رابط العرض:', url);
   }
 
+  // يمسح ملفات الواجهة المحفوظة فقط (لا الرمز ولا البيانات) ثم يعيد التحميل من الخادم
+  async function updateApp() {
+    toast('جارٍ تحديث التطبيق…');
+    try {
+      if (window.caches) { const ks = await caches.keys(); await Promise.all(ks.filter(k => k.startsWith(DEMO ? 'nasserdemo-' : 'nasser-')).map(k => caches.delete(k))); }
+      if (navigator.serviceWorker) { const reg = await navigator.serviceWorker.getRegistration(); if (reg) await reg.update().catch(() => {}); }
+    } catch (e) { /* نكمل بإعادة التحميل على أي حال */ }
+    location.reload();
+  }
+
   function gate(msg) {
     document.body.classList.remove('has-fab');
     $('fab').hidden = true; $('tabs').hidden = true; $('roleChip').hidden = true; $('syncline').textContent = '';
@@ -656,6 +669,7 @@
     }
     else if (act === 'share') share();
     else if (act === 'receipt') showReceipt(r);
+    else if (act === 'update-app') updateApp();
     else if (act === 'demo-role') {
       S.key = S.role === 'admin' ? 'view' : 'admin';
       LS.set(NS + 'key', S.key); closeSheet();
