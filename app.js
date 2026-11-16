@@ -4,7 +4,10 @@
   const CFG = window.APP_CONFIG || {};
   // على الجهاز المحلي يُستخدم خادم التجربة، إلا إذا أُضيف ‎?live=1 للاتصال بالملف الحقيقي
   const DEV = ['localhost', '127.0.0.1'].includes(location.hostname) && !/[?&]live=1/.test(location.search);
-  const API = DEV ? '/api' : CFG.API_URL;
+  // النسخة التجريبية: بيانات افتراضية تُحفظ على جهاز المتصفح فقط، بلا أي اتصال بملف الجمعية
+  const DEMO = !!CFG.DEMO;
+  const NS = DEMO ? 'nasserdemo.' : 'nasser.';
+  const API = DEMO ? 'demo' : DEV ? '/api' : CFG.API_URL;
   const T_IN = 'استلام من الجمعية', T_OUT = 'تحويل بنكي للجمعية';
   const POLL_MS = 20000;
 
@@ -76,10 +79,33 @@
   }
 
   /* ================= الاتصال والمزامنة ================= */
+  /* يحاكي الخادم في النسخة التجريبية بنفس القواعد: المشاهد لا يكتب، والحركات تُحفظ محليًا */
+  async function demoApi(action, payload) {
+    await new Promise(r => setTimeout(r, 250));
+    const role = S.key === 'view' ? 'viewer' : 'admin';
+    let rows;
+    try { rows = JSON.parse(LS.get(NS + 'rows')); } catch (e) { rows = null; }
+    if (!Array.isArray(rows)) rows = JSON.parse(JSON.stringify(CFG.DEMO_ROWS || []));
+    if (action !== 'list') {
+      if (role !== 'admin') throw new Error('FORBIDDEN');
+      const i = payload.r ? payload.r - 10 : -1;
+      if (action === 'add') rows.push(payload.row);
+      else if (action === 'update' && rows[i]) rows[i] = payload.row;
+      else if (action === 'delete' && rows[i]) rows.splice(i, 1);
+      LS.set(NS + 'rows', JSON.stringify(rows));
+    }
+    return {
+      ok: true, role, viewKey: role === 'admin' ? 'view' : null,
+      settings: { entity: 'جمعية الناصر', opening: 0, owner: 'مدير الجمعية' },
+      rows: rows.map((d, idx) => Object.assign({}, d, { r: 10 + idx }))
+    };
+  }
+
   async function api(action, payload) {
+    if (DEMO) return demoApi(action, payload);
     // مهلة قصوى حتى لا يتوقف التحديث التلقائي إذا علق طلب بسبب ضعف الاتصال
     const ctl = new AbortController();
-    const timer = setTimeout(() => ctl.abort(), 60000);
+    const timer = setTimeout(() => ctl.abort(), payload && payload.receipt ? 180000 : 60000);
     const res = await fetch(API, {
       signal: ctl.signal,
       method: 'POST',
@@ -101,7 +127,7 @@
     if (changed) {
       S.raw = raw; S.rows = data.rows; S.settings = data.settings;
       compute();
-      if (!fromCache) LS.set('nasser.cache', JSON.stringify({ role: data.role, rows: data.rows, settings: data.settings, at: S.lastSync }));
+      if (!fromCache) LS.set(NS + 'cache', JSON.stringify({ role: data.role, rows: data.rows, settings: data.settings, at: S.lastSync }));
       if (hadData && !fromCache && S.role === 'viewer') {
         toast(data.rows.length > prevCount ? 'وصلت حركة جديدة' : 'تم تحديث البيانات');
       }
@@ -117,7 +143,7 @@
       apply(await api('list'));
       if (manual) toast('البيانات محدّثة');
     } catch (e) {
-      if (e.message === 'UNAUTHORIZED') { LS.del('nasser.key'); LS.del('nasser.cache'); S.key = null; S.raw = ''; return gate('رمز الدخول غير صحيح'); }
+      if (e.message === 'UNAUTHORIZED') { LS.del(NS + 'key'); LS.del(NS + 'cache'); S.key = null; S.raw = ''; return gate('رمز الدخول غير صحيح'); }
       S.error = navigator.onLine === false ? 'لا يوجد اتصال بالإنترنت — تُعرض آخر بيانات محفوظة' : 'تعذّر الاتصال بالملف — تُعرض آخر بيانات محفوظة';
       chrome();
     } finally {
@@ -134,6 +160,10 @@
     chip.textContent = admin ? 'مدير الحساب' : 'عرض فقط';
     $('fab').hidden = !admin;
     document.body.classList.toggle('has-fab', admin);
+    if (DEMO) {
+      $('demobar').hidden = false;
+      $('demoRole').textContent = admin ? 'جرّب وضع «عرض فقط»' : 'جرّب وضع «مدير الحساب»';
+    }
     const sl = $('syncline');
     sl.classList.toggle('err', !!S.error);
     sl.textContent = S.error || (S.lastSync ? 'آخر مزامنة ' + new Date(S.lastSync).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) + ' • تحديث تلقائي' : '');
@@ -151,8 +181,9 @@
   const ICON_OUT = '<svg viewBox="0 0 24 24"><path d="M12 20V6M6 12l6-6 6 6"/></svg>';
 
   function mvTitle(m) {
-    if (m.isIn) return 'استلام' + (m.sender ? ' من ' + m.sender : ' من الجمعية');
-    return 'تحويل' + (m.to ? ' إلى ' + m.to : m.recipient ? ' إلى ' + m.recipient : ' للجمعية');
+    // نفس صيغة اسم ملف الإيصال في مجلد Drive (يُضاف له التاريخ هناك)
+    if (m.isIn) return 'استلام من ' + (m.sender || 'الجمعية');
+    return 'تحويل ل ' + (m.to || m.recipient || 'الجمعية');
   }
   function mvCard(m) {
     const sub = m.isIn
@@ -161,7 +192,7 @@
     return `<button class="mv ${m.isIn ? 'in' : 'out'}" data-act="detail" data-r="${m.r}">
       <span class="mv-ic">${m.isIn ? ICON_IN : ICON_OUT}</span>
       <span class="mv-main">
-        <span class="mv-title">${esc(mvTitle(m))}</span>
+        <span class="mv-title">${esc(mvTitle(m))}${m.receipt ? ' <span class="clip" title="إيصال مرفق">📎</span>' : ''}</span>
         <span class="mv-sub">${m.check !== 'سليم' ? `<span class="warn">${esc(m.check)}</span>` : esc(sub || fmtDate(m.date))}</span>
       </span>
       <span class="mv-amt"><b>${m.isIn ? '+' : '−'}${money(m.amount, m.cur)}</b>
@@ -381,7 +412,9 @@
         ${kv('مُدخل الحركة', txt(m.by))}
         ${kv('فحص الحركة', `<span class="badge ${m.check === 'سليم' ? 'ok' : 'bad'}">${esc(m.check)}</span>`)}
         ${kv('ملاحظات', txt(m.notes))}
+        ${kv('الإيصال', m.receipt ? '<span class="badge ok">مرفق</span>' : '<span class="muted">غير مرفق</span>')}
       </div>
+      ${m.receipt ? `<div class="btn-row"><button class="btn ghost" data-act="receipt" data-r="${m.r}">عرض الإيصال</button></div>` : ''}
       ${S.role === 'admin' ? `<div class="btn-row">
         <button class="btn" data-act="edit" data-r="${m.r}">تعديل</button>
         <button class="btn danger" data-act="del" data-r="${m.r}">حذف</button></div>` : ''}`);
@@ -395,6 +428,7 @@
     form = {
       r: m ? m.r : null,
       opId: Date.now().toString(36) + Math.random().toString(36).slice(2, 10),
+      receipt: null, hasReceipt: !!(m && m.receipt), removeReceipt: false,
       expect: m ? { date: m.date, type: m.type, amount: m.amount } : null,
       type: m ? (m.type === T_IN ? 'in' : 'out') : 'out',
       cur: m ? m.cur : 'ILS',
@@ -435,9 +469,13 @@
           <div class="f"><label>مُدخل الحركة</label><input name="by" value="${m ? v('by') : 'باسل'}"></div>
         </div>
         <div class="f"><label>ملاحظات</label><textarea name="notes" rows="2">${v('notes')}</textarea></div>
+        ${DEMO ? '' : `<div class="f"><label>إيصال التحويل (صورة)</label>
+          <input type="file" id="rcFile" accept="image/*" hidden>
+          <div class="rc" id="rcBox"></div></div>`}
         ${dl('dlS', 'sender')}${dl('dlF', 'from')}${dl('dlR', 'recipient')}${dl('dlT', 'to')}
         <button class="btn gold" id="saveBtn" type="submit">${m ? 'حفظ التعديل' : 'حفظ الحركة'}</button>
       </form>`);
+    rcRender();
     formSync();
   }
 
@@ -459,6 +497,60 @@
         sender: t('sender'), from: t('from'), recipient: t('recipient'), to: t('to'), ref: t('ref'), by: t('by'), notes: t('notes')
       }, commErr
     };
+  }
+
+  /* ---------- إيصال الحركة ---------- */
+  // تُصغَّر الصورة وتُضغط على الهاتف قبل الرفع لتناسب الاتصال الضعيف
+  function compressImage(file) {
+    return new Promise((resolve, reject) => {
+      const url = URL.createObjectURL(file), img = new Image();
+      img.onload = () => {
+        const k = Math.min(1, 1500 / Math.max(img.width, img.height));
+        const c = document.createElement('canvas');
+        c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+        const ctx = c.getContext('2d');
+        ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
+        ctx.drawImage(img, 0, 0, c.width, c.height);
+        URL.revokeObjectURL(url);
+        const d = c.toDataURL('image/jpeg', 0.72);
+        resolve({ mime: 'image/jpeg', data: d.split(',')[1], preview: d });
+      };
+      img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('تعذّرت قراءة الصورة')); };
+      img.src = url;
+    });
+  }
+
+  function rcRender() {
+    const box = $('rcBox');
+    if (!box || !form) return;
+    if (form.receipt) {
+      const kb = Math.round(form.receipt.data.length * 0.75 / 1024);
+      box.innerHTML = `<img src="${form.receipt.preview}" alt="">
+        <div class="rc-info"><b>صورة جاهزة للرفع</b><small class="num">${kb} KB</small>
+        <span><button type="button" data-act="rc-pick">تغيير</button><button type="button" data-act="rc-remove">إزالة</button></span></div>`;
+    } else if (form.hasReceipt && !form.removeReceipt) {
+      box.innerHTML = `<div class="rc-info"><b>يوجد إيصال مرفق بهذه الحركة</b>
+        <span><button type="button" data-act="rc-pick">استبدال</button><button type="button" data-act="rc-remove">حذف الإيصال</button></span></div>`;
+    } else {
+      box.innerHTML = `<button type="button" class="rc-add" data-act="rc-pick">＋ إرفاق صورة الإيصال</button>${form.hasReceipt ? '<small class="warn">سيُحذف الإيصال الحالي عند الحفظ</small>' : ''}`;
+    }
+  }
+
+  async function showReceipt(r) {
+    const m = S.calc.list.find(x => x.r === r);
+    if (!m) return;
+    toast('جارٍ تحميل الإيصال…');
+    try {
+      const d = await api('receipt', { r, expect: { date: m.date, type: m.type, amount: m.amount } });
+      const src = 'data:' + d.mime + ';base64,' + d.data;
+      openSheet('إيصال الحركة رقم ' + m.no, `<p class="muted" style="margin:0 2px 10px;font-size:13px">${esc(d.name)}</p>
+        <img class="receipt" src="${src}" alt="إيصال">
+        <div class="btn-row"><a class="btn ghost" href="${src}" download="${esc(d.name)}">تنزيل الصورة</a>
+        <button class="btn" data-act="detail" data-r="${m.r}">رجوع للتفاصيل</button></div>`);
+      $('toast').hidden = true;
+    } catch (e) {
+      toast('تعذّر تحميل الإيصال: ' + (navigator.onLine === false ? 'لا يوجد إنترنت' : e.message));
+    }
   }
 
   function formSync() {
@@ -491,10 +583,14 @@
     const btn = $('saveBtn');
     btn.disabled = true; btn.textContent = 'جارٍ الحفظ…';
     try {
-      const data = form.r ? await api('update', { r: form.r, expect: form.expect, row }) : await api('add', { row, opId: form.opId });
+      const rc = form.receipt ? { mime: form.receipt.mime, data: form.receipt.data } : undefined;
+      if (rc) btn.textContent = 'جارٍ الحفظ ورفع الإيصال…';
+      const data = form.r
+        ? await api('update', { r: form.r, expect: form.expect, row, receipt: rc, removeReceipt: form.removeReceipt || undefined })
+        : await api('add', { row, opId: form.opId, receipt: rc });
       const wasEdit = !!form.r;
       closeSheet(); apply(data);
-      toast(wasEdit ? 'تم حفظ التعديل' : 'تمت إضافة الحركة ومزامنتها');
+      toast(data.warn || (wasEdit ? 'تم حفظ التعديل' : 'تمت إضافة الحركة ومزامنتها'));
     } catch (e) {
       btn.disabled = false; btn.textContent = 'إعادة المحاولة';
       toast('لم يتأكد الحفظ: ' + (navigator.onLine === false ? 'لا يوجد إنترنت' : 'الاتصال ضعيف') + ' — أعد المحاولة');
@@ -534,7 +630,7 @@
 
   function start() {
     $('tabs').hidden = false;
-    const cached = LS.get('nasser.cache');
+    const cached = LS.get(NS + 'cache');
     if (cached) { try { const c = JSON.parse(cached); S.lastSync = c.at || 0; apply(c, true); } catch (e) { /* نسخة تالفة */ } }
     if (!S.calc) $('view').innerHTML = '<div class="empty">جارٍ تحميل البيانات…</div>';
     sync();
@@ -559,10 +655,32 @@
       render();
     }
     else if (act === 'share') share();
+    else if (act === 'receipt') showReceipt(r);
+    else if (act === 'demo-role') {
+      S.key = S.role === 'admin' ? 'view' : 'admin';
+      LS.set(NS + 'key', S.key); closeSheet();
+      S.raw = ''; S.tab = 'home'; sync().then(() => { render(); toast(S.role === 'admin' ? 'أنت الآن مدير الحساب' : 'أنت الآن في وضع العرض فقط'); });
+    }
+    else if (act === 'demo-reset') {
+      if (!confirm('إعادة البيانات التجريبية إلى حالتها الأصلية؟')) return;
+      LS.del(NS + 'rows'); LS.del(NS + 'cache'); closeSheet();
+      S.raw = ''; sync().then(() => toast('أُعيدت البيانات التجريبية'));
+    }
     else if (S.role !== 'admin') return;
     else if (act === 'add') openForm(null);
     else if (act === 'edit') openForm(r);
     else if (act === 'del') remove(r);
+    else if (act === 'rc-pick') { if ($('rcFile')) $('rcFile').click(); }
+    else if (act === 'rc-remove' && form) { form.receipt = null; if (form.hasReceipt) form.removeReceipt = true; rcRender(); }
+  });
+
+  document.addEventListener('change', async e => {
+    if (e.target.id !== 'rcFile' || !form) return;
+    const file = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    try { form.receipt = await compressImage(file); form.removeReceipt = false; rcRender(); }
+    catch (err) { toast(err.message); }
   });
 
   document.addEventListener('input', e => {
@@ -579,7 +697,7 @@
     if (e.target.id === 'mvForm') save();
     else if (e.target.id === 'gateForm') {
       S.key = new FormData(e.target).get('k').trim();
-      LS.set('nasser.key', S.key); start();
+      LS.set(NS + 'key', S.key); start();
     }
   });
 
@@ -591,10 +709,10 @@
   /* ================= التشغيل ================= */
   const hk = new URLSearchParams(location.hash.slice(1)).get('k');
   if (hk) {
-    if (hk !== LS.get('nasser.key')) LS.del('nasser.cache');
-    LS.set('nasser.key', hk);
+    if (hk !== LS.get(NS + 'key')) LS.del(NS + 'cache');
+    LS.set(NS + 'key', hk);
   }
-  S.key = hk || LS.get('nasser.key');
+  S.key = hk || LS.get(NS + 'key') || (DEMO ? 'admin' : null);
   if (S.key && API) start(); else gate();
 
   if ('serviceWorker' in navigator && !DEV) navigator.serviceWorker.register('sw.js').catch(() => {});
