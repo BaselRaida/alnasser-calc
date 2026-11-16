@@ -193,8 +193,8 @@
     return `<button class="mv ${m.isIn ? 'in' : 'out'}" data-act="detail" data-r="${m.r}">
       <span class="mv-ic">${m.isIn ? ICON_IN : ICON_OUT}</span>
       <span class="mv-main">
-        <span class="mv-title">${esc(mvTitle(m))}${m.receipt ? ' <span class="clip" title="إيصال مرفق">📎</span>' : ''}</span>
-        <span class="mv-sub">${m.check !== 'سليم' ? `<span class="warn">${esc(m.check)}</span>` : esc(sub || fmtDate(m.date))}</span>
+        <span class="mv-title">${esc(mvTitle(m))}</span>
+        <span class="mv-sub">${m.receipt ? '<span class="clip" title="إيصال مرفق">📎</span> ' : ''}${m.check !== 'سليم' ? `<span class="warn">${esc(m.check)}</span>` : esc(sub || fmtDate(m.date))}</span>
       </span>
       <span class="mv-amt"><b>${m.isIn ? '+' : '−'}${money(m.amount, m.cur)}</b>
         <small>${m.cur === 'ILS' || m.isIn ? (m.isIn ? 'صافي ' : '≈ ') + usd(m.j) : 'الرصيد ' + usd(m.bal)}</small></span>
