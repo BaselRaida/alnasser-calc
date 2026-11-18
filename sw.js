@@ -1,5 +1,5 @@
 // يحفظ ملفات الواجهة فقط ليفتح التطبيق بسرعة وبدون إنترنت. البيانات المالية لا تُخزَّن هنا.
-const CACHE = 'nasser-v6';
+const CACHE = 'nasser-v7';
 const SHELL = ['./', 'index.html', 'app.css', 'app.js', 'config.js', 'manifest.webmanifest', 'icons/icon-192.png'];
 
 self.addEventListener('install', e => {

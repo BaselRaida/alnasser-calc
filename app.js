@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const APP_VERSION = '1.2'; // يظهر في الإعدادات للتأكد من أن الهاتف يعمل بآخر نسخة
+  const APP_VERSION = '1.3'; // يظهر في الإعدادات للتأكد من أن الهاتف يعمل بآخر نسخة
   const CFG = window.APP_CONFIG || {};
   // على الجهاز المحلي يُستخدم خادم التجربة، إلا إذا أُضيف ‎?live=1 للاتصال بالملف الحقيقي
   const DEV = ['localhost', '127.0.0.1'].includes(location.hostname) && !/[?&]live=1/.test(location.search);
@@ -375,15 +375,45 @@
     document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === S.tab));
   }
 
+  /* ================= التنقل وزر الرجوع =================
+     كل تبويب غير «الرئيسية» وكل نافذة تُسجَّل في سجل المتصفح، فيعيد زر الرجوع في الهاتف
+     إلى الشاشة السابقة بدل الخروج من التطبيق. level: 0 = الرئيسية، 1 = تبويب آخر، 2+ = نوافذ فوقه. */
+  let nav = { nav: 1, level: 0, tab: 'home', sheet: null };
+  const navPush = st => { nav = Object.assign({ nav: 1 }, st); history.pushState(nav, ''); };
+  const navReplace = st => { nav = Object.assign({ nav: 1 }, st); history.replaceState(nav, ''); };
+
+  function goTab(t) {
+    if (t === S.tab) { window.scrollTo(0, 0); return; }
+    if (t === 'home') { if (nav.level === 1) { history.back(); return; } navReplace({ level: 0, tab: 'home', sheet: null }); }
+    else if (nav.level === 0) navPush({ level: 1, tab: t, sheet: null });
+    else navReplace({ level: 1, tab: t, sheet: null });
+    S.tab = t; render(); window.scrollTo(0, 0);
+  }
+
+  // يغلق النافذة الحالية بالرجوع خطوة في السجل (فيبقى السجل متطابقًا مع ما يراه المستخدم)
+  function dismissSheet() { if (nav.sheet) history.back(); else closeSheet(); }
+
+  window.addEventListener('popstate', e => {
+    const st = e.state && e.state.nav ? e.state : { nav: 1, level: 0, tab: 'home', sheet: null };
+    // الرجوع من نموذج فيه تعديلات غير محفوظة يحتاج تأكيدًا؛ عند الإلغاء نعيد النموذج إلى السجل
+    if (form && form.dirty && st.level < nav.level && !confirm('تجاهل التعديلات غير المحفوظة؟')) { history.pushState(nav, ''); return; }
+    nav = st;
+    closeSheet();
+    if (st.tab !== S.tab) { S.tab = st.tab; render(); window.scrollTo(0, 0); }
+    if (st.sheet && st.sheet.kind === 'detail' && S.calc && S.calc.list.some(x => x.r === st.sheet.r)) detail(st.sheet.r, true);
+    else if (st.sheet) navReplace(Object.assign({}, st, { sheet: null })); // نافذة لا يمكن إعادة فتحها (إيصال/نموذج)
+  });
+
   /* ================= النوافذ ================= */
-  function openSheet(title, body) {
+  function openSheet(title, body, desc, replay) {
     $('overlay').innerHTML = `<div class="backdrop" data-act="backdrop"><div class="sheet">
       <div class="sheet-head"><h3>${title}</h3><button class="x" data-act="close" aria-label="إغلاق">✕</button></div>${body}</div></div>`;
     document.body.style.overflow = 'hidden';
+    if (!replay) navPush({ level: nav.level + 1, tab: S.tab, sheet: desc || { kind: 'sheet' } });
   }
   function closeSheet() { $('overlay').innerHTML = ''; document.body.style.overflow = ''; form = null; }
 
-  function detail(r) {
+  function detail(r, replay) {
     const m = S.calc.list.find(x => x.r === r);
     if (!m) return;
     const kv = (k, v) => `<div class="kv"><span>${k}</span><span>${v}</span></div>`;
@@ -420,7 +450,7 @@
       ${m.receipt ? `<div class="btn-row"><button class="btn ghost" data-act="receipt" data-r="${m.r}">عرض الإيصال</button></div>` : ''}
       ${S.role === 'admin' ? `<div class="btn-row">
         <button class="btn" data-act="edit" data-r="${m.r}">تعديل</button>
-        <button class="btn danger" data-act="del" data-r="${m.r}">حذف</button></div>` : ''}`);
+        <button class="btn danger" data-act="del" data-r="${m.r}">حذف</button></div>` : ''}`, { kind: 'detail', r: m.r }, replay);
   }
 
   /* ================= نموذج الإضافة والتعديل (للمدير فقط) ================= */
@@ -477,7 +507,7 @@
           <div class="rc" id="rcBox"></div></div>`}
         ${dl('dlS', 'sender')}${dl('dlF', 'from')}${dl('dlR', 'recipient')}${dl('dlT', 'to')}
         <button class="btn gold" id="saveBtn" type="submit">${m ? 'حفظ التعديل' : 'حفظ الحركة'}</button>
-      </form>`);
+      </form>`, { kind: 'form', r: m ? m.r : null });
     rcRender();
     formSync();
   }
@@ -549,7 +579,7 @@
       openSheet('إيصال الحركة رقم ' + m.no, `<p class="muted" style="margin:0 2px 10px;font-size:13px">${esc(d.name)}</p>
         <img class="receipt" src="${src}" alt="إيصال">
         <div class="btn-row"><a class="btn ghost" href="${src}" download="${esc(d.name)}">تنزيل الصورة</a>
-        <button class="btn" data-act="detail" data-r="${m.r}">رجوع للتفاصيل</button></div>`);
+        <button class="btn" data-act="back">رجوع للتفاصيل</button></div>`, { kind: 'receipt', r: m.r });
       $('toast').hidden = true;
     } catch (e) {
       toast('تعذّر تحميل الإيصال: ' + (navigator.onLine === false ? 'لا يوجد إنترنت' : e.message));
@@ -592,7 +622,7 @@
         ? await api('update', { r: form.r, expect: form.expect, row, receipt: rc, removeReceipt: form.removeReceipt || undefined })
         : await api('add', { row, opId: form.opId, receipt: rc });
       const wasEdit = !!form.r;
-      closeSheet(); apply(data);
+      form.dirty = false; dismissSheet(); apply(data);
       toast(data.warn || (wasEdit ? 'تم حفظ التعديل' : 'تمت إضافة الحركة ومزامنتها'));
     } catch (e) {
       btn.disabled = false; btn.textContent = 'إعادة المحاولة';
@@ -606,9 +636,9 @@
     if (!m || !confirm(`حذف الحركة رقم ${m.no} نهائيًا من الملف؟\n${m.type} — ${m.amount} ${m.cur} — ${m.date}`)) return;
     try {
       const data = await api('delete', { r, expect: { date: m.date, type: m.type, amount: m.amount } });
-      closeSheet(); apply(data); toast('تم حذف الحركة');
+      dismissSheet(); apply(data); toast('تم حذف الحركة');
     } catch (e) {
-      closeSheet();
+      dismissSheet();
       toast('لم يتأكد الحذف — جارٍ تحديث البيانات');
       sync(); // لمعرفة الحالة الفعلية في الملف قبل أي محاولة أخرى
     }
@@ -652,14 +682,14 @@
   /* ================= الأحداث ================= */
   document.addEventListener('click', e => {
     const tab = e.target.closest('[data-tab]');
-    if (tab) { S.tab = tab.dataset.tab; render(); window.scrollTo(0, 0); return; }
+    if (tab) { goTab(tab.dataset.tab); return; }
     const seg = e.target.closest('#mvForm [data-seg] button');
-    if (seg && form) { form[seg.parentElement.dataset.seg] = seg.dataset.v; formSync(); return; }
+    if (seg && form) { form[seg.parentElement.dataset.seg] = seg.dataset.v; form.dirty = true; formSync(); return; }
     const el = e.target.closest('[data-act]');
     if (!el) return;
     const act = el.dataset.act, r = Number(el.dataset.r);
-    if (act === 'backdrop') { if (e.target === el && !form) closeSheet(); }
-    else if (act === 'close') closeSheet();
+    if (act === 'backdrop') { if (e.target === el && !form) dismissSheet(); }
+    else if (act === 'close' || act === 'back') dismissSheet();
     else if (act === 'refresh') sync(true);
     else if (act === 'detail') detail(r);
     else if (act === 'filter') {
@@ -673,7 +703,7 @@
     else if (act === 'demo-role') {
       S.key = S.role === 'admin' ? 'view' : 'admin';
       LS.set(NS + 'key', S.key); closeSheet();
-      S.raw = ''; S.tab = 'home'; sync().then(() => { render(); toast(S.role === 'admin' ? 'أنت الآن مدير الحساب' : 'أنت الآن في وضع العرض فقط'); });
+      S.raw = ''; sync().then(() => { render(); goTab('home'); toast(S.role === 'admin' ? 'أنت الآن مدير الحساب' : 'أنت الآن في وضع العرض فقط'); });
     }
     else if (act === 'demo-reset') {
       if (!confirm('إعادة البيانات التجريبية إلى حالتها الأصلية؟')) return;
@@ -685,7 +715,7 @@
     else if (act === 'edit') openForm(r);
     else if (act === 'del') remove(r);
     else if (act === 'rc-pick') { if ($('rcFile')) $('rcFile').click(); }
-    else if (act === 'rc-remove' && form) { form.receipt = null; if (form.hasReceipt) form.removeReceipt = true; rcRender(); }
+    else if (act === 'rc-remove' && form) { form.receipt = null; form.dirty = true; if (form.hasReceipt) form.removeReceipt = true; rcRender(); }
   });
 
   document.addEventListener('change', async e => {
@@ -693,7 +723,7 @@
     const file = e.target.files && e.target.files[0];
     e.target.value = '';
     if (!file) return;
-    try { form.receipt = await compressImage(file); form.removeReceipt = false; rcRender(); }
+    try { form.receipt = await compressImage(file); form.removeReceipt = false; form.dirty = true; rcRender(); }
     catch (err) { toast(err.message); }
   });
 
@@ -703,7 +733,7 @@
       const a = Number($('cA').value), rt = Number($('cR').value);
       $('cO').innerHTML = rt > 0 ? usd(a / rt) : '—';
     }
-    else if (e.target.closest('#mvForm')) formSync();
+    else if (e.target.closest('#mvForm')) { if (form) form.dirty = true; formSync(); }
   });
 
   document.addEventListener('submit', e => {
@@ -721,6 +751,12 @@
   setInterval(() => { if (!document.hidden && !form) sync(); }, POLL_MS);
 
   /* ================= التشغيل ================= */
+  // بعد إعادة التحميل يحتفظ المتصفح بآخر حالة: نعود لنفس التبويب، أما النوافذ فلا تُستعاد
+  if (history.state && history.state.nav) {
+    S.tab = views[history.state.tab] ? history.state.tab : 'home';
+    navReplace({ level: S.tab === 'home' ? 0 : 1, tab: S.tab, sheet: null });
+  } else navReplace({ level: 0, tab: 'home', sheet: null });
+
   const hk = new URLSearchParams(location.hash.slice(1)).get('k');
   if (hk) {
     if (hk !== LS.get(NS + 'key')) LS.del(NS + 'cache');
